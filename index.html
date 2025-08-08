@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pokémon Chess — Canvas (Sprites + Evolution)</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: #0e0f13; color: #e6e6e6; }
+    .app { display: grid; grid-template-columns: minmax(300px, 70vmin) 1fr; gap: 20px; padding: 16px; }
+    #boardWrap { position: relative; aspect-ratio: 1 / 1; background: #1a1c24; border: 2px solid #2a2d3a; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35); overflow: hidden; }
+    #board { width: 100%; height: 100%; display: block; }
+    .side { display: grid; grid-template-rows: auto auto 1fr auto; gap: 14px; min-width: 280px; }
+    .card { background: #141621; border: 1px solid #242738; border-radius: 12px; padding: 12px 14px; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+    .title { font-weight: 700; letter-spacing: 0.2px; margin-bottom: 8px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    button { appearance: none; background: #2a2f44; color: #e6e6e6; border: 1px solid #3b4160; border-radius: 10px; padding: 10px 14px; font-weight: 600; cursor: pointer; transition: transform .04s ease, background .2s ease, border-color .2s ease; }
+    button:hover { background: #323959; border-color: #4c5686; }
+    button:active { transform: translateY(1px); }
+    .pill { display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 999px; background: #1e2030; border: 1px solid #2f334b; font-size: 13px; }
+    .log { height: 320px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    .tiny { font-size: 12px; opacity: .9; }
+    .legend { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; font-size: 13px; }
+    .badge { font-weight: 700; }
+    .hr { height: 1px; background: #242738; margin: 8px 0; }
+    .disclaimer { color: #aeb5cc; font-size: 11.5px; opacity: .85; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div id="boardWrap">
+      <canvas id="board"></canvas>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="title">Pokémon Chess — Canvas</div>
+        <div class="row">
+          <div class="pill" id="turnPill">Turn: <span class="badge" id="turnText" style="margin-left:6px;">White</span></div>
+          <div class="pill">Mode: <span class="badge" style="margin-left:6px;">Local 2P</span></div>
+        </div>
+        <div class="hr"></div>
+        <div class="legend"></div>
+        <div id="pieceInfo" class="tiny"></div>
+      </div>
+
+      <div class="card">
+        <div class="title">Actions</div>
+        <div class="row">
+          <button id="newGameBtn">New Game</button>
+          <button id="undoBtn">Undo</button>
+          <button id="flipBtn">Flip Board</button>
+          <button id="toggleSpritesBtn">Sprites: On</button>
+          <button id="runTestsBtn">Run Tests</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="title">Move Log</div>
+        <div id="log" class="log"></div>
+      </div>
+
+      <div class="card tiny">
+        <div class="title">How evolution works</div>
+        <ul>
+          <li>Each piece has a Pokémon line (Stage 1 → 2 → 3) with <b>real sprites</b>.</li>
+          <li>Capturing grants <b>+1 XP</b>. At XP thresholds (1 and 3), the piece <b>evolves</b> — sprite and name update + a glow animation.</li>
+          <li>Pawns still promote on the last rank — themed as <b>final evolution to Queen</b>.</li>
+          <li>Core chess rules implemented (no castling / en passant yet).</li>
+        </ul>
+        <div class="disclaimer">Sprites are fetched live from the public PokéAPI sprite repository. Pokémon and all related media are ©Nintendo/Creatures Inc./GAME FREAK. This is a fan-made educational demo.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // ====== Config ======
+  const SQUARES = 8;
+  const LIGHT = '#c0cad6';
+  const DARK  = '#6a7a91';
+  const HIGHLIGHT = '#ffdf5a';
+  const SELECT    = '#8ae3ff';
+  const MOVE_DOT  = '#0e0f13aa';
+  const CAPT_DOT  = '#ff6b6bcc';
+  const LASTMOVE  = '#6d9cff55';
+
+  const XP_THRESHOLDS = [1,3]; // evolve at 1 and 3 captures
+
+  // Pokémon lines per piece type/color
+  const PokeLines = {
+    white: {
+      pawn:   ['Bulbasaur','Ivysaur','Venusaur'],
+      rook:   ['Onix','Steelix','Steelix'], // use Steelix as final (no mega sprite here)
+      knight: ['Pichu','Pikachu','Raichu'],
+      bishop: ['Ralts','Kirlia','Gardevoir'],
+      queen:  ['Eevee','Sylveon','Sylveon'],
+      king:   ['Mew','Mew','Mew']
+    },
+    black: {
+      pawn:   ['Charmander','Charmeleon','Charizard'],
+      rook:   ['Geodude','Graveler','Golem'],
+      knight: ['Tyrogue','Hitmonlee','Hitmonchan'],
+      bishop: ['Gastly','Haunter','Gengar'],
+      queen:  ['Eevee','Umbreon','Umbreon'],
+      king:   ['Mewtwo','Mewtwo','Mewtwo']
+    }
+  };
+
+  // Map Pokémon names used above -> PokéAPI numeric IDs (for classic front sprites)
+  const POKE_ID = {
+    Bulbasaur:1, Ivysaur:2, Venusaur:3,
+    Charmander:4, Charmeleon:5, Charizard:6,
+    Onix:95, Steelix:208,
+    Geodude:74, Graveler:75, Golem:76,
+    Pichu:172, Pikachu:25, Raichu:26,
+    Tyrogue:236, Hitmonlee:106, Hitmonchan:107,
+    Ralts:280, Kirlia:281, Gardevoir:282,
+    Gastly:92, Haunter:93, Gengar:94,
+    Eevee:133, Sylveon:700, Umbreon:197,
+    Mew:151, Mewtwo:150
+  };
+
+  const SPRITE_BASE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon';
+  const spriteURL = (id)=> `${SPRITE_BASE}/${id}.png`;
+
+  // ====== Sprite cache / preloader ======
+  const SpriteCache = new Map();
+  function loadSpriteByName(name){
+    const id = POKE_ID[name];
+    if (!id) return null;
+    if (!SpriteCache.has(id)){
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = spriteURL(id);
+      SpriteCache.set(id, img);
+    }
+    return SpriteCache.get(id);
+  }
+  // Preload everything we reference
+  (function preloadAll(){
+    for (const side of Object.values(PokeLines)){
+      for (const line of Object.values(side)){
+        for (const name of line){ loadSpriteByName(name); }
+      }
+    }
+  })();
+
+  // ====== Helpers ======
+  const deepClone = (o)=> JSON.parse(JSON.stringify(o));
+  const inBounds = (r,c)=> r>=0 && r<8 && c>=0 && c<8;
+  const algebra = (c,r)=> String.fromCharCode(97+c)+(8-r);
+  const opposite = (color)=> color==='white' ? 'black' : 'white';
+
+  function makeEmptyBoard(){ return Array.from({length:8},()=>Array(8).fill(null)); }
+  function makePiece(type,color,row,col){
+    const line = PokeLines[color][type];
+    return { id:`${type}-${color}-${Math.random().toString(36).slice(2,8)}`,
+      type, color, row, col, stage:1, xp:0, line, hasMoved:false, anim:null };
+  }
+
+  function startingPosition(){
+    const b = makeEmptyBoard();
+    for (let c=0;c<8;c++) b[6][c] = makePiece('pawn','white',6,c);
+    b[7][0]=makePiece('rook','white',7,0); b[7][7]=makePiece('rook','white',7,7);
+    b[7][1]=makePiece('knight','white',7,1); b[7][6]=makePiece('knight','white',7,6);
+    b[7][2]=makePiece('bishop','white',7,2); b[7][5]=makePiece('bishop','white',7,5);
+    b[7][3]=makePiece('queen','white',7,3);  b[7][4]=makePiece('king','white',7,4);
+
+    for (let c=0;c<8;c++) b[1][c] = makePiece('pawn','black',1,c);
+    b[0][0]=makePiece('rook','black',0,0); b[0][7]=makePiece('rook','black',0,7);
+    b[0][1]=makePiece('knight','black',0,1); b[0][6]=makePiece('knight','black',0,6);
+    b[0][2]=makePiece('bishop','black',0,2); b[0][5]=makePiece('bishop','black',0,5);
+    b[0][3]=makePiece('queen','black',0,3);  b[0][4]=makePiece('king','black',0,4);
+    return b;
+  }
+
+  // ====== Attack / Move generation ======
+  function locateKing(board, color){
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++){ const p=board[r][c]; if (p && p.type==='king' && p.color===color) return [r,c]; }
+    return null;
+  }
+  function attacksFor(board,piece){
+    const {type,color,row,col}=piece; const out=[]; const dir=color==='white'?-1:1;
+    if (type==='pawn'){ for (const dc of [-1,1]){ const r=row+dir,c=col+dc; if (inBounds(r,c)) out.push([r,c]); } return out; }
+    if (type==='knight'){ const ds=[[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]]; for (const [dr,dc] of ds){ const r=row+dr,c=col+dc; if (inBounds(r,c)) out.push([r,c]); } return out; }
+    const rays=[]; if (type==='bishop'||type==='queen') rays.push([1,1],[1,-1],[-1,1],[-1,-1]); if (type==='rook'||type==='queen') rays.push([1,0],[-1,0],[0,1],[0,-1]); if (type==='king') rays.push([1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]);
+    for (const [dr,dc] of rays){ let r=row+dr,c=col+dc; while(inBounds(r,c)){ out.push([r,c]); if (board[r][c]||type==='king') break; r+=dr; c+=dc; } }
+    return out;
+  }
+  function isSquareAttacked(board,r,c,byColor){
+    for (let i=0;i<8;i++) for (let j=0;j<8;j++){ const p=board[i][j]; if (!p||p.color!==byColor) continue; const atks=attacksFor(board,p); for (const [ar,ac] of atks){ if (ar===r&&ac===c) return true; } }
+    return false;
+  }
+  function legalize(board,piece,moves){
+    const out=[];
+    for (const [r,c] of moves){
+      const sim=deepClone(board); const p=sim[piece.row][piece.col];
+      sim[r][c] = {...p, row:r, col:c, hasMoved:true};
+      sim[piece.row][piece.col]=null;
+      const [kr,kc]=locateKing(sim,piece.color);
+      if (!isSquareAttacked(sim,kr,kc,opposite(piece.color))) out.push([r,c]);
+    }
+    return out;
+  }
+  function generateMoves(board,piece){
+    const {type,color,row,col}=piece; const dir=color==='white'?-1:1; const raw=[];
+    if (type==='pawn'){
+      const f1r=row+dir, f1c=col; if (inBounds(f1r,f1c) && !board[f1r][f1c]){ raw.push([f1r,f1c]); const startRow=color==='white'?6:1; const f2r=row+2*dir; if (row===startRow && !board[f2r][f1c]) raw.push([f2r,f1c]); }
+      for (const dc of [-1,1]){ const r=row+dir,c=col+dc; if (!inBounds(r,c)) continue; const t=board[r][c]; if (t && t.color!==color) raw.push([r,c]); }
+      return legalize(board,piece,raw);
+    }
+    if (type==='knight'){
+      const ds=[[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]]; for (const [dr,dc] of ds){ const r=row+dr,c=col+dc; if (!inBounds(r,c)) continue; const t=board[r][c]; if (!t||t.color!==color) raw.push([r,c]); }
+      return legalize(board,piece,raw);
+    }
+    const rays=[]; if (type==='bishop'||type==='queen') rays.push([1,1],[1,-1],[-1,1],[-1,-1]); if (type==='rook'||type==='queen') rays.push([1,0],[-1,0],[0,1],[0,-1]); if (type==='king') rays.push([1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]);
+    for (const [dr,dc] of rays){ let r=row+dr,c=col+dc; while(inBounds(r,c)){ const t=board[r][c]; if (!t) raw.push([r,c]); else { if (t.color!==color) raw.push([r,c]); break; } if (type==='king') break; r+=dr; c+=dc; } }
+    return legalize(board,piece,raw);
+  }
+
+  // ====== Game State ======
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const logEl = document.getElementById('log');
+  const turnText = document.getElementById('turnText');
+  const pieceInfo = document.getElementById('pieceInfo');
+  let board = startingPosition();
+  let turn = 'white';
+  let selected = null; let legal = []; let lastMove = null; let history=[]; let flipped=false; let useSprites=true;
+
+  // ====== Drawing ======
+  function resize(){ const rect = document.getElementById('boardWrap').getBoundingClientRect(); const size=Math.floor(Math.min(rect.width, rect.height)); canvas.width=size; canvas.height=size; draw(); }
+  window.addEventListener('resize', resize);
+  const squareSize = ()=> canvas.width / SQUARES;
+
+  function drawBoard(){
+    const s=squareSize();
+    for (let r=0;r<8;r++){
+      for (let c=0;c<8;c++){
+        const file = flipped? 7-c : c; const rank = flipped? 7-r : r; const x=file*s, y=rank*s; const isLight=(r+c)%2===0;
+        ctx.fillStyle = isLight? LIGHT : DARK; ctx.fillRect(x,y,s,s);
+        if (lastMove){ const [fr,fc]=lastMove.from; const [tr,tc]=lastMove.to; const lf=flipped?7-fc:fc, lr=flipped?7-fr:fr; const tf=flipped?7-tc:tc, trn=flipped?7-tr:tr; if ((lr===rank&&lf===file)||(trn===rank&&tf===file)){ ctx.fillStyle=LASTMOVE; ctx.fillRect(x,y,s,s);} }
+      }
+    }
+    // coords
+    ctx.font = `${Math.max(10, squareSize()*0.18)}px ui-monospace`; ctx.textBaseline='top'; ctx.fillStyle='#10121988';
+    for (let c=0;c<8;c++){ const ch=String.fromCharCode(97+c); const x=(flipped?7-c:c)*s+4; ctx.fillText(ch,x,2); }
+    for (let r=0;r<8;r++){ const ch=String(8-r); const y=(flipped?r:7-r)*s+2; ctx.fillText(ch,2,y); }
+  }
+
+  function drawPieces(){
+    const s=squareSize(); const now=performance.now(); let animate=false;
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++){
+      const p=board[r][c]; if (!p) continue; const file=flipped?7-c:c; const rank=flipped?7-r:r; const x=file*s, y=rank*s; const cx=x+s/2, cy=y+s/2; const rad=s*0.42;
+      // Selection ring
+      if (selected && selected.row===r && selected.col===c){ ctx.strokeStyle=SELECT; ctx.lineWidth=4; ctx.strokeRect(x+2,y+2,s-4,s-4); }
+
+      // Evolution glow animation (300 ms)
+      let scale=1; if (p.anim && p.anim.type==='evolve'){ const t=(now-p.anim.start)/300; if (t<1){ animate=true; scale=1+0.25*Math.sin(t*Math.PI); } else { p.anim=null; }}
+
+      // Draw sprite or chip
+      const name = p.line[p.stage-1];
+      const img = useSprites ? loadSpriteByName(name) : null;
+      if (useSprites && img && img.complete){
+        const w = s*0.80*scale, h = s*0.80*scale;
+        ctx.drawImage(img, cx-w/2, cy-h/2, w, h);
+      } else {
+        // fallback chip
+        const grad=ctx.createRadialGradient(cx,cy,rad*0.2, cx,cy,rad); if (p.color==='white'){ grad.addColorStop(0,'#f9f9fb'); grad.addColorStop(1,'#cfd9ea'); } else { grad.addColorStop(0,'#2b2f3e'); grad.addColorStop(1,'#1a1d28'); }
+        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(cx,cy,rad*0.8*scale,0,Math.PI*2); ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle = p.color==='white' ? '#93a2bf' : '#46506a'; ctx.stroke();
+        ctx.fillStyle = p.color==='white' ? '#0d1020' : '#f1f4ff'; ctx.font = `bold ${Math.max(10, s*0.18)}px system-ui`; const sym=pieceSymbol(p); const sw=ctx.measureText(sym).width; ctx.fillText(sym, cx-sw/2, cy-7);
+      }
+
+      // XP dots
+      const xpDots=Math.min(p.xp,3); for (let i=0;i<xpDots;i++){ ctx.fillStyle='#ffdf5a'; ctx.beginPath(); ctx.arc(cx - (xpDots-1)*6 + i*12, cy + (s*0.42) - 4, 3.5, 0, Math.PI*2); ctx.fill(); }
+    }
+
+    // Legal move dots
+    if (selected && legal.length){ for (const [r,c] of legal){ const file=flipped?7-c:c; const rank=flipped?7-r:r; const x=file*s, y=rank*s; const t=board[r][c]; ctx.fillStyle=t?CAPT_DOT:MOVE_DOT; ctx.beginPath(); ctx.arc(x+s/2, y+s/2, Math.max(6,s*0.07), 0, Math.PI*2); ctx.fill(); } }
+
+    if (animate) requestAnimationFrame(draw); // keep animating while needed
+  }
+
+  function draw(){ drawBoard(); drawPieces(); }
+
+  // ====== Labels ======
+  function pieceSymbol(p){ return ({king:'K', queen:'Q', rook:'R', bishop:'B', knight:'N', pawn:''})[p.type]; }
+
+  // ====== Input ======
+  canvas.addEventListener('mousedown', (e)=>{ const rect=canvas.getBoundingClientRect(); const s=squareSize(); const mx=e.clientX-rect.left, my=e.clientY-rect.top; const c=Math.floor(mx/s), r=Math.floor(my/s); const bc=flipped?7-c:c, br=flipped?7-r:r; handleClick(br,bc); });
+
+  function handleClick(r,c){
+    const p=board[r][c];
+    if (selected){
+      const legalHere = legal.some(([lr,lc])=>lr===r&&lc===c);
+      if (legalHere){ makeMove(selected.row, selected.col, r, c); selected=null; legal=[]; draw(); return; }
+      if (p && p.color===turn){ selected=p; legal=generateMoves(board,p); showPieceInfo(p); draw(); return; }
+      selected=null; legal=[]; pieceInfo.textContent=''; draw(); return;
+    }
+    if (p && p.color===turn){ selected=p; legal=generateMoves(board,p); showPieceInfo(p); draw(); }
+  }
+
+  // ====== Evolution helper ======
+  function maybeEvolve(piece, {animate=true}={}){
+    for (let i=0;i<XP_THRESHOLDS.length;i++){
+      if (piece.stage===i+1 && piece.xp>=XP_THRESHOLDS[i]){
+        piece.stage = Math.min(3, piece.stage+1);
+        if (animate) piece.anim = {type:'evolve', start:performance.now()};
+      }
+    }
+  }
+
+  // ====== Game flow ======
+  function pushHistory(){ history.push({board: deepClone(board), turn, lastMove: lastMove? {...lastMove}:null}); }
+  function popHistory(){ if (!history.length) return; const prev=history.pop(); board=prev.board; turn=prev.turn; lastMove=prev.lastMove; selected=null; legal=[]; updateTurnPill(); draw(); }
+  function log(s){ logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+  function updateTurnPill(){ turnText.textContent = turn.charAt(0).toUpperCase()+turn.slice(1); turnText.style.color = turn==='white'? '#ffdf5a' : '#8ae3ff'; }
+  function showPieceInfo(p){ pieceInfo.innerHTML = `<b>Selected:</b> ${p.color} ${p.type.toUpperCase()}<br/><b>Pokémon:</b> ${p.line[p.stage-1]} (Stage ${p.stage})<br/><b>XP:</b> ${p.xp} — evolves at ${XP_THRESHOLDS.filter(x=>x>p.xp)[0] || 'max'}`; }
+
+  function makeMove(fr,fc,tr,tc){
+    pushHistory(); const moving=board[fr][fc]; const target=board[tr][tc];
+    board[tr][tc] = {...moving, row:tr, col:tc, hasMoved:true}; board[fr][fc]=null;
+    let note = `${symbolFor(moving)}${algebra(fc,fr)}→${algebra(tc,tr)}`;
+
+    if (target){ board[tr][tc].xp += 1; note += ` x ${symbolFor(target)}`; const piece=board[tr][tc]; maybeEvolve(piece,{animate:true}); if (piece.anim){ note += ` — evolved to ${piece.line[piece.stage-1]}!`; requestAnimationFrame(draw); } }
+
+    // promotion -> queen (final evo)
+    if (moving.type==='pawn' && ((moving.color==='white'&&tr===0)||(moving.color==='black'&&tr===7))){
+      const evolvedLine = PokeLines[moving.color]['queen'];
+      const p = board[tr][tc]; p.type='queen'; p.line=evolvedLine; p.stage=3; p.anim={type:'evolve', start:performance.now()};
+      note += ` — <promoted to Queen (${evolvedLine[2]})>`; requestAnimationFrame(draw);
+    }
+
+    lastMove = {from:[fr,fc], to:[tr,tc]}; turn = opposite(turn); updateTurnPill();
+
+    const end = evaluateEndStates(); if (end){ note += ` — ${end}`; }
+    log(note);
+  }
+
+  function symbolFor(p){ const map={king:'K', queen:'Q', rook:'R', bishop:'B', knight:'N', pawn:''}; return (p.color==='white'?'♙':'♟︎') + map[p.type]; }
+  function evaluateEndStates(){ const their=turn; const [kr,kc]=locateKing(board,their); const inChk=isSquareAttacked(board,kr,kc,opposite(their)); let hasMoves=false; outer: for (let r=0;r<8;r++) for (let c=0;c<8;c++){ const p=board[r][c]; if (!p||p.color!==their) continue; if (generateMoves(board,p).length){ hasMoves=true; break outer; } } if (inChk && !hasMoves){ log(`Checkmate! ${opposite(their)} wins.`); return 'Checkmate'; } else if (!inChk && !hasMoves){ log(`Stalemate! Draw.`); return 'Stalemate'; } else if (inChk){ log(`${their} is in check.`); return 'Check'; } return ''; }
+
+  // ====== Tests ======
+  function assert(name, condition){ const ok = !!condition; const msg = `${ok?'✅ PASS':'❌ FAIL'} — ${name}`; log(msg); if (!ok) console.warn(msg); }
+
+  function runSelfTests(){
+    log('--- Running self tests ---');
+    // Test 1: Pawn double step from start
+    { const b=startingPosition(); const p=b[6][0]; const moves=generateMoves(b,p).map(([r,c])=>`${r},${c}`); assert('White pawn at a2 can move to a3 and a4', moves.includes('5,0') && moves.includes('4,0')); }
+    // Test 2: Knight moves from b1
+    { const b=startingPosition(); const p=b[7][1]; const moves=generateMoves(b,p).map(([r,c])=>`${r},${c}`); assert('Knight at b1 can go to a3 and c3', moves.includes('5,0') && moves.includes('5,2')); }
+    // Test 3: Evolution thresholds
+    { const p=makePiece('pawn','white',6,0); assert('Stage 1 initially', p.stage===1); p.xp=1; maybeEvolve(p,{animate:false}); assert('Evolves to Stage 2 at 1 XP', p.stage===2); p.xp=3; maybeEvolve(p,{animate:false}); assert('Evolves to Stage 3 at 3 XP', p.stage===3); }
+    // Test 4: Check detection (rook checks king)
+    { const b=makeEmptyBoard(); b[7][4]=makePiece('king','white',7,4); b[0][4]=makePiece('king','black',0,4); b[7][0]=makePiece('rook','black',7,0); assert('White king at e1 is attacked by black rook at a1', isSquareAttacked(b,7,4,'black')); }
+    log('--- Tests complete ---');
+  }
+
+  // ====== Controls ======
+  document.getElementById('newGameBtn').addEventListener('click', ()=>{ board=startingPosition(); history=[]; selected=null; legal=[]; lastMove=null; turn='white'; logEl.textContent=''; updateTurnPill(); draw(); log('New game started.'); });
+  document.getElementById('undoBtn').addEventListener('click', ()=> popHistory());
+  document.getElementById('flipBtn').addEventListener('click', ()=>{ flipped=!flipped; draw(); });
+  document.getElementById('toggleSpritesBtn').addEventListener('click', (e)=>{ useSprites=!useSprites; e.target.textContent = `Sprites: ${useSprites?'On':'Off'}`; draw(); });
+  document.getElementById('runTestsBtn').addEventListener('click', runSelfTests);
+
+  // ====== Kickoff ======
+  resize(); updateTurnPill(); log('Welcome to Pokémon Chess! Capture to gain XP and evolve. Pawns promote (final evolve).');
+  // Auto-run a quick self test once when the page loads
+  runSelfTests();
+})();
+</script>
+</body>
+</html>
